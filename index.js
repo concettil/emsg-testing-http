@@ -1,4 +1,5 @@
 const fs = require('fs');
+const http = require('http');
 const https = require('https');
 const ISOBoxer = require('codem-isoboxer');
 const argv = require('minimist')(process.argv.slice(2));
@@ -43,8 +44,9 @@ if (!filePath && !initUrl) {
 }
 
 function getSegment(url) {
+    const protocol = url.startsWith('https') ? https : http;  // Use 'http' or 'https' based on the URL
     return new Promise((resolve, reject) => {
-        https.get(url, {encoding: null}, (response) => {
+        protocol.get(url, { encoding: null }, (response) => {
             if (response.statusCode >= 300) {
                 reject(Error(`Invalid status code: ${response.statusCode} - ${response.statusMessage}`));
                 response.resume();
@@ -78,19 +80,19 @@ function logBoxesFromArrayBuffer(arrayBuffer) {
     } else {
         emsgBoxes.forEach((emsgBox) => {
             const unwrap = ({
-                size,
-                type,
-                version,
-                flags,
-                scheme_id_uri,
-                value,
-                timescale,
-                presentation_time,
-                presentation_time_delta,
-                event_duration,
-                id,
-                message_data
-            }) => ({
+                                size,
+                                type,
+                                version,
+                                flags,
+                                scheme_id_uri,
+                                value,
+                                timescale,
+                                presentation_time,
+                                presentation_time_delta,
+                                event_duration,
+                                id,
+                                message_data
+                            }) => ({
                 size,
                 type,
                 version,
