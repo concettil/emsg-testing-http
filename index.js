@@ -1,8 +1,9 @@
-const fs = require('fs');
-const http = require('http');
-const https = require('https');
-const ISOBoxer = require('codem-isoboxer');
-const argv = require('minimist')(process.argv.slice(2));
+const fs = require('fs');          // Modulo per la gestione del file system
+const http = require('http');      // Modulo per effettuare richieste HTTP
+const https = require('https');    // Modulo per effettuare richieste HTTPS
+const ISOBoxer = require('codem-isoboxer');  // Libreria per analizzare i box ISO BMFF (come MP4)
+const argv = require('minimist')(process.argv.slice(2));  // Modulo per analizzare gli argomenti della riga di comando
+const xml2js = require('xml2js');  // Modulo per il parsing dell'XML
 
 const help = argv.help;
 if (help) {
@@ -12,39 +13,20 @@ if (help) {
     Available commands:
       --help                  Show this help description.
 
-      --file <local_path>     Specify a local file URL for an MP4 file. This cannot be used
-                              in conjunction with --init and --segment.
-
-      --init <remote_url>     Specify a remote URL for a CMAF init segment. When specifying
-                              --init then --segment must also be specified. This cannot be
-                              used in conjunction with --file.
-
-      --segment <remote_url>  Specify a remote URL for a CMAF segment. When specifying
-                              --segment then --init must also be specified. This cannot be
-                              used in conjunction with --file.
+      --manifest <url>        Specify the URL for the DASH manifest (MPD).
     `;
     console.log(helpMessage);
     return;
 }
 
-const filePath = argv.file;
-const initUrl = argv.init;
-const segmentUrl = argv.segment;
-if ((filePath && initUrl) || (filePath && segmentUrl)) {
-    throw Error('Cannot use both --file argument and --init or --segment arguments');
-}
-if (initUrl && !segmentUrl) {
-    throw Error('Must pass --segment when using --init');
-}
-if (segmentUrl && !initUrl) {
-    throw Error('Must pass --init when using --segment');
-}
-if (!filePath && !initUrl) {
-    throw Error('No argument provided for segment (either use --file and local path, or --init and --segment for remote URLs)');
+const manifestUrl = argv.manifest;
+
+if (!manifestUrl) {
+    throw Error('No argument provided for manifest URL');
 }
 
 function getSegment(url) {
-    const protocol = url.startsWith('https') ? https : http;  // Use 'http' or 'https' based on the URL
+    const protocol = url.startsWith('https') ? https : http;
     return new Promise((resolve, reject) => {
         protocol.get(url, { encoding: null }, (response) => {
             if (response.statusCode >= 300) {
@@ -71,7 +53,8 @@ function getSegment(url) {
     });
 }
 
-function logBoxesFromArrayBuffer(arrayBuffer) {
+function logBoxesFromArrayBuffer(buffer) {
+    const arrayBuffer = buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength);
     const parsedFile  = ISOBoxer.parseBuffer(arrayBuffer);
     const emsgBoxes = parsedFile.boxes.filter((box) => box.type == 'emsg');
 
@@ -111,16 +94,37 @@ function logBoxesFromArrayBuffer(arrayBuffer) {
     }
 }
 
-if (filePath) {
-    const arrayBuffer = new Uint8Array(fs.readFileSync(filePath)).buffer;
-    logBoxesFromArrayBuffer(arrayBuffer);
-} else {
-    const initPromise = getSegment(initUrl);
-    const segmentPromise = getSegment(segmentUrl);
-    Promise.all([initPromise, segmentPromise]).then(([initData, segmentData]) => {
-        const completeData = Buffer.concat([initData, segmentData]);
-        logBoxesFromArrayBuffer(completeData.buffer);
-    }).catch((error) => {
-        throw error;
-    });
+async function processManifest(url) {
+    const manifestData = await getSegment(url);
+    const manifestXml = manifestData.toString();
+    const parser = new xml2js.Parser();
+    const manifest = await parser.parseStringPromise(manifestXml);
+
+    const adaptationSets = manifest.MPD.Period[0].AdaptationSet;
+    const videoRepresentations = adaptationSets
+        .filter(set => set.$.mimeType === 'video/mp4')
+        .flatMap(set => set.Representation);
+
+    if (videoRepresentations.length === 0) {
+        throw new Error('No video representations found in the manifest.');
+    }
+
+    videoRepresentations.sort((a, b) => parseInt(a.$.width, 10) - parseInt(b.$.width, 10));
+    const lowestResolutionRepresentation = videoRepresentations[0];
+    const representationId = lowestResolutionRepresentation.$.id;
+    const segmentTemplate = adaptationSets.find(set => set.$.mimeType === 'video/mp4').SegmentTemplate[0];
+
+    const mediaUrl = segmentTemplate.$.media.replace('$RepresentationID$', representationId).replace('$Time$', segmentTemplate.SegmentTimeline[0].S[0].$.t);
+
+    const baseUrl = url.substring(0, url.lastIndexOf('/'));
+    const chunkUrl = `${baseUrl}/${mediaUrl}`;
+
+    console.log(`Fetching segment from URL: ${chunkUrl}`);
+
+    const segmentBuffer = await getSegment(chunkUrl);
+    logBoxesFromArrayBuffer(segmentBuffer);
 }
+
+processManifest(manifestUrl).catch(error => {
+    console.error('Error processing manifest:', error);
+});
