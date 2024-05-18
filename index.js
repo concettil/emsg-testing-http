@@ -63,33 +63,46 @@ function logBoxesFromArrayBuffer(buffer) {
     } else {
         emsgBoxes.forEach((emsgBox) => {
             const unwrap = ({
-                                size,
-                                type,
-                                version,
-                                flags,
+                                id,
                                 scheme_id_uri,
                                 value,
                                 timescale,
                                 presentation_time,
                                 presentation_time_delta,
                                 event_duration,
-                                id,
                                 message_data
                             }) => ({
-                size,
-                type,
-                version,
-                flags,
+                id,
                 scheme_id_uri,
                 value,
                 timescale,
                 presentation_time,
                 presentation_time_delta,
                 event_duration,
-                id,
                 message_data: (new TextDecoder()).decode(message_data)
             });
-            console.log(unwrap(emsgBox));
+
+            const metadata = unwrap(emsgBox).message_data;
+            const fields = metadata.split(',');
+            const filteredData = {};
+            fields.forEach(field => {
+                const [key, value] = field.split('=');
+                filteredData[key] = value;
+            });
+
+            const selectedFields = [
+                'p.id', 'f.id', 'c.up', 'f.eid', 'p.a1.id', 'p.a2.id', 'p.dur',
+                'p.eid', 'p.ev', 'p.pr', 'p.rst', 'p.st', 'p.tz'
+            ];
+
+            const result = {};
+            selectedFields.forEach(field => {
+                if (filteredData[field] !== undefined) {
+                    result[field] = filteredData[field];
+                }
+            });
+
+            console.log('Metadati ID3: ' + JSON.stringify(result));
         });
     }
 }
